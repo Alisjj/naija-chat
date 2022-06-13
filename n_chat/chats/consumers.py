@@ -29,6 +29,18 @@ class ChatConsumer(JsonWebsocketConsumer):
         self.conversation_name = None
         self.conversation = None
 
+    def chat_message_echo(self, event):
+        self.send_json(event)
+
+    def user_join(self, event):
+        self.send_json(event)
+
+    def user_leave(self, event):
+        self.send_json(event)
+
+    def typing(self, event):
+        self.send_json(event)
+
     @classmethod
     def encode_json(cls, content):
         return json.dumps(content, cls=UUIDEncoder)
@@ -47,20 +59,42 @@ class ChatConsumer(JsonWebsocketConsumer):
             self.channel_name,
         )
 
+        self.send_json(
+            {
+                "type": "online_user_list",
+                "users": [user.username for user in self.conversation.online.all()],
+            }
+        )
+
+        async_to_sync(self.channel_layer.group_send)(
+            self.conversation_name,
+            {
+                "type": "user_join",
+                "user": self.user.username,
+            },
+        )
+
+        self.conversation.online.add(self.user)
+
         messages = self.conversation.messages.all().order_by("-timestamp")[0:50]
+        message_count = self.conversation.messages.all().count()
         self.send_json({
             "type": "last_50_messages",
             "messages": MessageSerializer(messages, many=True).data,
+            "has_more": message_count > 50,
         })
 
-        
-
-    def chat_message_echo(self, event):
-        print(event)
-        self.send_json(event)
-
     def disconnect(self, code):
-        print("Disconnected!")
+        if self.user.is_authenticated:
+            # send the leave event to the room
+            async_to_sync(self.channel_layer.group_send)(
+                self.conversation_name,
+                {
+                    "type": "user_leave",
+                    "user": self.user.username,
+                },
+            )
+            self.conversation.online.remove(self.user)
         return super().disconnect(code)
 
     def get_receiver(self):
@@ -78,7 +112,6 @@ class ChatConsumer(JsonWebsocketConsumer):
                 content=content["message"],
                 conversation=self.conversation
             )
-            print(message)
             async_to_sync(self.channel_layer.group_send)(
                 self.conversation_name,
                 {
@@ -87,4 +120,15 @@ class ChatConsumer(JsonWebsocketConsumer):
                     "message": MessageSerializer(message).data,
                 },
             )
+        
+        if message_type == "typing":
+            async_to_sync(self.channel_layer.group_send)(
+                self.conversation_name,
+                {
+                    "type": "typing",
+                    "user": self.user.username,
+                    "typing": content["typing"],
+                },
+            )
+
         return super().receive_json(content, **kwargs)
