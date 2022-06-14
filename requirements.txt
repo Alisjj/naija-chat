@@ -1,5 +1,3 @@
 # This file is expected by Heroku.
 
-channels==3.0.4
-channels-redis==3.4.0
 -r requirements/production.txt
